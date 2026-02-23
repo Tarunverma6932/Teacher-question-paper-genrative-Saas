@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EduAssess Pro</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  </head>
+  <body>
+    <div class="bg-orb orb-left"></div>
+    <div class="bg-orb orb-right"></div>
+    <main class="platform-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SaaS for Teachers and Students</p>
+          <h1>EduAssess Pro</h1>
+          <p class="tagline">
+            Upload chapter PDFs and generate summative assessment papers in your own question pattern.
+          </p>
+        </div>
+      </header>
+
+      <section id="authSection" class="panel">
+        <div class="tabs">
+          <button id="signInTab" class="tab active" type="button">Sign In</button>
+          <button id="signUpTab" class="tab" type="button">Sign Up</button>
+        </div>
+
+        <form id="signInForm" class="form-grid">
+          <label>
+            Email
+            <input id="signinEmail" type="email" placeholder="teacher@school.com" required />
+          </label>
+          <label>
+            Password
+            <input id="signinPassword" type="password" placeholder="Enter password" required />
+          </label>
+          <button class="btn btn-primary" type="submit">Login to Dashboard</button>
+          <p class="hint">Demo: `teacher@demo.com` / `teacher123`, `student@demo.com` / `student123`</p>
+        </form>
+
+        <form id="signUpForm" class="form-grid hidden">
+          <label>
+            Full Name
+            <input id="signupName" type="text" placeholder="Your full name" required />
+          </label>
+          <label>
+            Email
+            <input id="signupEmail" type="email" placeholder="name@school.com" required />
+          </label>
+          <label>
+            Password
+            <input id="signupPassword" type="password" minlength="6" placeholder="At least 6 characters" required />
+          </label>
+          <label>
+            Role
+            <select id="signupRole" required>
+              <option value="teacher">Teacher</option>
+              <option value="student">Student</option>
+            </select>
+          </label>
+          <label>
+            Institution
+            <input id="signupInstitution" type="text" placeholder="School / College" />
+          </label>
+          <label>
+            Subject or Class
+            <input id="signupTrack" type="text" placeholder="Science / Grade 8 / etc." />
+          </label>
+          <button class="btn btn-primary" type="submit">Create Account</button>
+        </form>
+        <p id="authMessage" class="message" role="alert"></p>
+      </section>
+
+      <section id="dashboardSection" class="dashboard hidden">
+        <aside class="profile-panel">
+          <div class="avatar" id="profileAvatar"></div>
+          <h2 id="profileName"></h2>
+          <p id="profileRoleBadge" class="role-badge"></p>
+          <div class="profile-meta">
+            <p><span>Email:</span> <strong id="profileEmail"></strong></p>
+            <p><span>Institution:</span> <strong id="profileInstitution"></strong></p>
+            <p><span>Subject/Class:</span> <strong id="profileTrack"></strong></p>
+          </div>
+          <div class="profile-editor">
+            <label>
+              Update Institution
+              <input id="profileInstitutionInput" type="text" placeholder="School / College" />
+            </label>
+            <label>
+              Update Subject/Class
+              <input id="profileTrackInput" type="text" placeholder="Science / Grade / Stream" />
+            </label>
+            <button id="saveProfileBtn" class="btn btn-secondary" type="button">Save Profile</button>
+          </div>
+          <button id="logoutBtn" class="btn btn-ghost" type="button">Log Out</button>
+        </aside>
+
+        <div class="workspace">
+          <div id="teacherWorkspace" class="workspace-pane hidden">
+            <section class="card">
+              <div class="card-head">
+                <h3>Google Drive Connection</h3>
+                <span class="pill">Teacher Tool</span>
+              </div>
+              <p class="subtle">
+                Connect a Google Drive folder link to keep class resources handy.
+              </p>
+              <label>
+                Drive Folder URL
+                <input id="driveUrlInput" type="url" placeholder="https://drive.google.com/drive/folders/..." />
+              </label>
+              <div class="inline-actions">
+                <button id="saveDriveBtn" class="btn btn-secondary" type="button">Connect Drive Link</button>
+                <button id="openDriveBtn" class="btn btn-ghost" type="button">Open Connected Drive</button>
+              </div>
+              <p id="driveStatus" class="message"></p>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <h3>Generate Summative Assessment</h3>
+                <span class="pill">PDF to Questions</span>
+              </div>
+              <div class="form-grid two-col">
+                <label>
+                  Assessment Title
+                  <input id="assessmentTitle" type="text" placeholder="Unit Test - Chapter 4" />
+                </label>
+                <label>
+                  Chapter Name (optional)
+                  <input id="chapterName" type="text" placeholder="The Human Respiratory System" />
+                </label>
+              </div>
+              <label>
+                Upload Chapter/Book PDF
+                <input id="pdfInput" type="file" accept="application/pdf" />
+              </label>
+
+              <div class="pattern-grid">
+                <label>
+                  MCQs
+                  <input id="mcqCount" type="number" min="0" max="30" value="5" />
+                </label>
+                <label>
+                  Very Short
+                  <input id="veryShortCount" type="number" min="0" max="30" value="3" />
+                </label>
+                <label>
+                  Short
+                  <input id="shortCount" type="number" min="0" max="20" value="3" />
+                </label>
+                <label>
+                  Long
+                  <input id="longCount" type="number" min="0" max="20" value="2" />
+                </label>
+              </div>
+
+              <label>
+                Pattern Notes (optional)
+                <textarea
+                  id="patternNotes"
+                  rows="3"
+                  placeholder="Example: include competency-based wording, NCERT style, and analytical long answers."
+                ></textarea>
+              </label>
+
+              <div class="inline-actions">
+                <button id="generateBtn" class="btn btn-primary" type="button">Generate Paper</button>
+                <button id="publishBtn" class="btn btn-secondary" type="button" disabled>Publish for Students</button>
+                <button id="printBtn" class="btn btn-ghost" type="button" disabled>Print</button>
+              </div>
+              <p id="generatorStatus" class="message"></p>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <h3>Generated Paper</h3>
+                <span class="pill">Live Preview</span>
+              </div>
+              <div id="paperOutput" class="paper-output empty">
+                Generate an assessment to preview it here.
+              </div>
+            </section>
+          </div>
+
+          <div id="studentWorkspace" class="workspace-pane hidden">
+            <section class="card">
+              <div class="card-head">
+                <h3>Student Assessment Feed</h3>
+                <span class="pill">Student View</span>
+              </div>
+              <p class="subtle">Published assessments from teachers appear below.</p>
+              <div id="studentFeed" class="feed-list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
