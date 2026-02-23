@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: teacher-question-paper-saas
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: python backend/server.py
+    envVars:
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: TOKEN_TTL_DAYS
+        value: "7"

@@ -1,156 +1,26 @@
-const STORAGE_KEY = "eduAssessProV1";
+const TOKEN_KEY = "eduAssessAccessToken";
+const API_BASE = window.__API_BASE__ || "";
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const state = {
-  data: {
-    users: [],
-    currentUserId: null,
-    assessments: []
-  },
+  token: localStorage.getItem(TOKEN_KEY),
+  currentUser: null,
   authTab: "signin",
   draftAssessment: null
 };
 
-const stopWords = new Set([
-  "about",
-  "above",
-  "after",
-  "again",
-  "against",
-  "all",
-  "also",
-  "among",
-  "and",
-  "any",
-  "are",
-  "because",
-  "been",
-  "before",
-  "being",
-  "below",
-  "between",
-  "both",
-  "but",
-  "can",
-  "could",
-  "did",
-  "does",
-  "each",
-  "few",
-  "for",
-  "from",
-  "had",
-  "has",
-  "have",
-  "here",
-  "into",
-  "its",
-  "more",
-  "most",
-  "other",
-  "our",
-  "out",
-  "over",
-  "some",
-  "such",
-  "than",
-  "that",
-  "their",
-  "them",
-  "then",
-  "there",
-  "these",
-  "they",
-  "this",
-  "those",
-  "through",
-  "under",
-  "very",
-  "what",
-  "when",
-  "where",
-  "which",
-  "while",
-  "with",
-  "would",
-  "your"
-]);
-
 document.addEventListener("DOMContentLoaded", () => {
-  seedDefaultUsers();
-  loadState();
   bindEvents();
   renderApp();
+  restoreSession();
 });
 
-function seedDefaultUsers() {
-  if (localStorage.getItem(STORAGE_KEY)) {
-    return;
-  }
-
-  const seeded = {
-    users: [
-      {
-        id: crypto.randomUUID(),
-        name: "Riya Sharma",
-        email: "teacher@demo.com",
-        password: "teacher123",
-        role: "teacher",
-        profile: {
-          institution: "Blue Valley School",
-          track: "Science"
-        }
-      },
-      {
-        id: crypto.randomUUID(),
-        name: "Aman Gupta",
-        email: "student@demo.com",
-        password: "student123",
-        role: "student",
-        profile: {
-          institution: "Blue Valley School",
-          track: "Grade 8"
-        }
-      }
-    ],
-    currentUserId: null,
-    assessments: []
-  };
-
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
-}
-
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return;
-    }
-    const parsed = JSON.parse(raw);
-    if (!parsed.users || !Array.isArray(parsed.users)) {
-      return;
-    }
-    state.data = parsed;
-  } catch (error) {
-    console.error("Failed to load state", error);
-  }
-}
-
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
-}
-
 function bindEvents() {
-  const signInTab = byId("signInTab");
-  const signUpTab = byId("signUpTab");
-  const signInForm = byId("signInForm");
-  const signUpForm = byId("signUpForm");
+  byId("signInTab").addEventListener("click", () => switchAuthTab("signin"));
+  byId("signUpTab").addEventListener("click", () => switchAuthTab("signup"));
 
-  signInTab.addEventListener("click", () => switchAuthTab("signin"));
-  signUpTab.addEventListener("click", () => switchAuthTab("signup"));
-
-  signInForm.addEventListener("submit", handleSignIn);
-  signUpForm.addEventListener("submit", handleSignUp);
+  byId("signInForm").addEventListener("submit", handleSignIn);
+  byId("signUpForm").addEventListener("submit", handleSignUp);
 
   byId("logoutBtn").addEventListener("click", handleLogout);
   byId("saveProfileBtn").addEventListener("click", handleSaveProfile);
@@ -163,6 +33,21 @@ function bindEvents() {
   byId("printBtn").addEventListener("click", handlePrintPaper);
 }
 
+async function restoreSession() {
+  if (!state.token) {
+    return;
+  }
+
+  try {
+    const response = await apiRequest("/api/auth/me");
+    state.currentUser = response.user;
+  } catch (error) {
+    clearSession();
+  }
+
+  renderApp();
+}
+
 function switchAuthTab(tab) {
   state.authTab = tab;
   byId("signInTab").classList.toggle("active", tab === "signin");
@@ -172,116 +57,119 @@ function switchAuthTab(tab) {
   setMessage("authMessage", "", "");
 }
 
-function handleSignIn(event) {
+async function handleSignIn(event) {
   event.preventDefault();
+
   const email = byId("signinEmail").value.trim().toLowerCase();
   const password = byId("signinPassword").value;
 
-  const user = state.data.users.find((candidate) => candidate.email === email);
-  if (!user || user.password !== password) {
-    setMessage("authMessage", "Invalid credentials. Please check email and password.", "error");
-    return;
-  }
+  try {
+    const response = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: {
+        email,
+        password
+      }
+    });
 
-  state.data.currentUserId = user.id;
-  saveState();
-  setMessage("authMessage", "Logged in successfully.", "success");
-  byId("signInForm").reset();
-  renderApp();
+    setSession(response.token, response.user);
+    setMessage("authMessage", "Logged in successfully.", "success");
+    byId("signInForm").reset();
+    renderApp();
+  } catch (error) {
+    setMessage("authMessage", error.message, "error");
+  }
 }
 
-function handleSignUp(event) {
+async function handleSignUp(event) {
   event.preventDefault();
 
-  const name = byId("signupName").value.trim();
-  const email = byId("signupEmail").value.trim().toLowerCase();
-  const password = byId("signupPassword").value;
-  const role = byId("signupRole").value;
-  const institution = byId("signupInstitution").value.trim();
-  const track = byId("signupTrack").value.trim();
-
-  if (state.data.users.some((candidate) => candidate.email === email)) {
-    setMessage("authMessage", "An account already exists with this email.", "error");
-    return;
-  }
-
-  const newUser = {
-    id: crypto.randomUUID(),
-    name,
-    email,
-    password,
-    role,
-    profile: {
-      institution,
-      track,
-      driveUrl: ""
-    }
+  const payload = {
+    name: byId("signupName").value.trim(),
+    email: byId("signupEmail").value.trim().toLowerCase(),
+    password: byId("signupPassword").value,
+    role: byId("signupRole").value,
+    institution: byId("signupInstitution").value.trim(),
+    track: byId("signupTrack").value.trim()
   };
 
-  state.data.users.push(newUser);
-  state.data.currentUserId = newUser.id;
-  saveState();
+  try {
+    const response = await apiRequest("/api/auth/register", {
+      method: "POST",
+      body: payload
+    });
 
-  setMessage("authMessage", "Account created and logged in.", "success");
-  byId("signUpForm").reset();
-  renderApp();
+    setSession(response.token, response.user);
+    setMessage("authMessage", "Account created and logged in.", "success");
+    byId("signUpForm").reset();
+    renderApp();
+  } catch (error) {
+    setMessage("authMessage", error.message, "error");
+  }
 }
 
-function handleLogout() {
-  state.data.currentUserId = null;
+async function handleLogout() {
+  try {
+    if (state.token) {
+      await apiRequest("/api/auth/logout", { method: "POST" });
+    }
+  } catch (error) {
+    // Ignore logout API failure and clear local session anyway.
+  }
+
+  clearSession();
   state.draftAssessment = null;
-  saveState();
   renderApp();
 }
 
-function handleSaveProfile() {
-  const user = getCurrentUser();
-  if (!user) {
+async function handleSaveProfile() {
+  if (!state.currentUser) {
     return;
   }
 
   const institution = byId("profileInstitutionInput").value.trim();
   const track = byId("profileTrackInput").value.trim();
 
-  user.profile = {
-    ...user.profile,
-    institution,
-    track
-  };
+  try {
+    const response = await apiRequest("/api/profile", {
+      method: "PUT",
+      body: {
+        institution,
+        track
+      }
+    });
 
-  saveState();
-  renderProfile(user);
+    state.currentUser = response.user;
+    renderProfile(state.currentUser);
+  } catch (error) {
+    setMessage("generatorStatus", error.message, "error");
+  }
 }
 
-function handleDriveConnect() {
-  const user = getCurrentUser();
-  if (!user || user.role !== "teacher") {
+async function handleDriveConnect() {
+  if (!state.currentUser || state.currentUser.role !== "teacher") {
     return;
   }
 
   const driveUrl = byId("driveUrlInput").value.trim();
-  if (!driveUrl.startsWith("https://drive.google.com")) {
-    setMessage("driveStatus", "Please enter a valid Google Drive URL.", "error");
-    return;
+  try {
+    const response = await apiRequest("/api/drive", {
+      method: "POST",
+      body: {
+        driveUrl
+      }
+    });
+
+    state.currentUser = response.user;
+    setMessage("driveStatus", "Google Drive link connected successfully.", "success");
+    renderProfile(state.currentUser);
+  } catch (error) {
+    setMessage("driveStatus", error.message, "error");
   }
-
-  user.profile = {
-    ...user.profile,
-    driveUrl,
-    driveConnectedAt: new Date().toISOString()
-  };
-  saveState();
-
-  setMessage("driveStatus", "Google Drive link connected successfully.", "success");
 }
 
 function handleDriveOpen() {
-  const user = getCurrentUser();
-  if (!user || user.role !== "teacher") {
-    return;
-  }
-
-  const driveUrl = user.profile?.driveUrl;
+  const driveUrl = state.currentUser?.profile?.driveUrl;
   if (!driveUrl) {
     setMessage("driveStatus", "Connect a drive link first.", "error");
     return;
@@ -291,8 +179,7 @@ function handleDriveOpen() {
 }
 
 async function handleGeneratePaper() {
-  const user = getCurrentUser();
-  if (!user || user.role !== "teacher") {
+  if (!state.currentUser || state.currentUser.role !== "teacher") {
     return;
   }
 
@@ -315,7 +202,7 @@ async function handleGeneratePaper() {
     return;
   }
 
-  const manualChapter = byId("chapterName").value.trim();
+  const chapterTitle = byId("chapterName").value.trim() || cleanFileName(pdf.name);
   const title = byId("assessmentTitle").value.trim() || "Summative Assessment";
   const patternNotes = byId("patternNotes").value.trim();
 
@@ -323,55 +210,61 @@ async function handleGeneratePaper() {
 
   try {
     const extractedText = await extractPdfText(pdf, 8);
-    const chapterTitle = manualChapter || cleanFileName(pdf.name);
-    const paper = buildPaper({
-      chapterTitle,
-      title,
-      extractedText,
-      patternNotes,
-      counts,
-      teacherName: user.name
+    const response = await apiRequest("/api/assessments/generate", {
+      method: "POST",
+      body: {
+        title,
+        chapterTitle,
+        patternNotes,
+        extractedText,
+        counts
+      }
     });
 
     state.draftAssessment = {
-      id: crypto.randomUUID(),
-      ...paper,
-      teacherId: user.id,
-      teacherName: user.name,
-      createdAt: new Date().toISOString(),
+      ...response.paper,
+      createdAt: response.paper.createdAt || new Date().toISOString(),
+      teacherName: state.currentUser.name,
       published: false
     };
 
     renderPaper(state.draftAssessment);
     byId("publishBtn").disabled = false;
     byId("printBtn").disabled = false;
-
     setMessage("generatorStatus", "Assessment generated. Review and publish for students.", "success");
   } catch (error) {
-    console.error(error);
-    setMessage("generatorStatus", "Could not read this PDF. Try another file.", "error");
+    setMessage("generatorStatus", error.message, "error");
   }
 }
 
-function handlePublishPaper() {
-  const draft = state.draftAssessment;
-  const user = getCurrentUser();
-
-  if (!draft || !user || user.role !== "teacher") {
+async function handlePublishPaper() {
+  if (!state.currentUser || state.currentUser.role !== "teacher" || !state.draftAssessment) {
     return;
   }
 
-  const publishRecord = {
-    ...draft,
-    published: true,
-    publishedAt: new Date().toISOString()
-  };
+  try {
+    const response = await apiRequest("/api/assessments", {
+      method: "POST",
+      body: {
+        title: state.draftAssessment.title,
+        chapterTitle: state.draftAssessment.chapterTitle,
+        patternNotes: state.draftAssessment.patternNotes,
+        questions: state.draftAssessment.questions
+      }
+    });
 
-  state.data.assessments.unshift(publishRecord);
-  saveState();
+    state.draftAssessment = {
+      ...state.draftAssessment,
+      id: response.assessment.id,
+      published: true,
+      publishedAt: response.assessment.publishedAt
+    };
 
-  byId("publishBtn").disabled = true;
-  setMessage("generatorStatus", "Assessment published to student feed.", "success");
+    byId("publishBtn").disabled = true;
+    setMessage("generatorStatus", "Assessment published to student feed.", "success");
+  } catch (error) {
+    setMessage("generatorStatus", error.message, "error");
+  }
 }
 
 function handlePrintPaper() {
@@ -379,8 +272,7 @@ function handlePrintPaper() {
 }
 
 function renderApp() {
-  const user = getCurrentUser();
-
+  const user = state.currentUser;
   byId("authSection").classList.toggle("hidden", !!user);
   byId("dashboardSection").classList.toggle("hidden", !user);
 
@@ -393,6 +285,7 @@ function renderApp() {
 
   const teacherPanel = byId("teacherWorkspace");
   const studentPanel = byId("studentWorkspace");
+
   teacherPanel.classList.toggle("hidden", user.role !== "teacher");
   studentPanel.classList.toggle("hidden", user.role !== "student");
 
@@ -417,6 +310,7 @@ function renderProfile(user) {
 
 function hydrateTeacherWorkspace(user) {
   byId("driveUrlInput").value = user.profile?.driveUrl || "";
+
   if (user.profile?.driveUrl) {
     const connectedOn = user.profile.driveConnectedAt
       ? new Date(user.profile.driveConnectedAt).toLocaleString()
@@ -428,7 +322,7 @@ function hydrateTeacherWorkspace(user) {
 
   if (state.draftAssessment) {
     renderPaper(state.draftAssessment);
-    byId("publishBtn").disabled = false;
+    byId("publishBtn").disabled = state.draftAssessment.published;
     byId("printBtn").disabled = false;
   } else {
     byId("paperOutput").textContent = "Generate an assessment to preview it here.";
@@ -438,31 +332,38 @@ function hydrateTeacherWorkspace(user) {
   }
 }
 
-function renderStudentFeed() {
+async function renderStudentFeed() {
   const feedEl = byId("studentFeed");
-  const published = state.data.assessments.filter((assessment) => assessment.published);
+  feedEl.innerHTML = `<p class="subtle">Loading assessments...</p>`;
 
-  if (!published.length) {
-    feedEl.innerHTML = `<p class="subtle">No assessments published yet.</p>`;
-    return;
+  try {
+    const response = await apiRequest("/api/assessments");
+    const assessments = response.assessments || [];
+
+    if (!assessments.length) {
+      feedEl.innerHTML = `<p class="subtle">No assessments published yet.</p>`;
+      return;
+    }
+
+    feedEl.innerHTML = assessments
+      .map((assessment) => {
+        const when = new Date(assessment.publishedAt || assessment.createdAt).toLocaleString();
+        return `
+          <article class="feed-item">
+            <h4>${escapeHtml(assessment.title)}</h4>
+            <p class="feed-meta">By ${escapeHtml(assessment.teacherName)} • ${when}</p>
+            <p class="feed-meta">Chapter: ${escapeHtml(assessment.chapterTitle)}</p>
+            <details>
+              <summary>Open paper</summary>
+              ${renderPaperMarkup(assessment, false)}
+            </details>
+          </article>
+        `;
+      })
+      .join("");
+  } catch (error) {
+    feedEl.innerHTML = `<p class="message error">${escapeHtml(error.message)}</p>`;
   }
-
-  feedEl.innerHTML = published
-    .map((assessment) => {
-      const when = new Date(assessment.publishedAt || assessment.createdAt).toLocaleString();
-      return `
-        <article class="feed-item">
-          <h4>${escapeHtml(assessment.title)}</h4>
-          <p class="feed-meta">By ${escapeHtml(assessment.teacherName)} • ${when}</p>
-          <p class="feed-meta">Chapter: ${escapeHtml(assessment.chapterTitle)}</p>
-          <details>
-            <summary>Open paper</summary>
-            ${renderPaperMarkup(assessment, false)}
-          </details>
-        </article>
-      `;
-    })
-    .join("");
 }
 
 function renderPaper(paper) {
@@ -476,9 +377,9 @@ function renderPaperMarkup(paper, showAnswers) {
     <section class="paper-header">
       <h4>${escapeHtml(paper.title)}</h4>
       <p>
-        Teacher: ${escapeHtml(paper.teacherName)}<br />
+        Teacher: ${escapeHtml(paper.teacherName || state.currentUser?.name || "Teacher")}<br />
         Chapter: ${escapeHtml(paper.chapterTitle)}<br />
-        Generated: ${new Date(paper.createdAt).toLocaleString()}${
+        Generated: ${new Date(paper.createdAt || Date.now()).toLocaleString()}${
     paper.patternNotes ? `<br />Pattern notes: ${escapeHtml(paper.patternNotes)}` : ""
   }
       </p>
@@ -492,7 +393,7 @@ function renderPaperMarkup(paper, showAnswers) {
 }
 
 function renderQuestionSection(title, questions, mode, showAnswers) {
-  if (!questions.length) {
+  if (!questions || !questions.length) {
     return "";
   }
 
@@ -502,10 +403,10 @@ function renderQuestionSection(title, questions, mode, showAnswers) {
         return `<li>
           ${escapeHtml(question.prompt)}
           <div class="options">
-            ${question.options
+            ${(question.options || [])
               .map((option, optionIndex) => `${String.fromCharCode(65 + optionIndex)}. ${escapeHtml(option)}`)
               .join("&nbsp;&nbsp; ")}
-            ${showAnswers ? `<br /><em>Answer: ${escapeHtml(question.answer)}</em>` : ""}
+            ${showAnswers && question.answer ? `<br /><em>Answer: ${escapeHtml(question.answer)}</em>` : ""}
           </div>
         </li>`;
       }
@@ -522,112 +423,50 @@ function renderQuestionSection(title, questions, mode, showAnswers) {
   `;
 }
 
-function buildPaper({ chapterTitle, title, extractedText, patternNotes, counts, teacherName }) {
-  const keywords = extractKeywords(extractedText, chapterTitle);
-
-  return {
-    chapterTitle,
-    title,
-    patternNotes,
-    teacherName,
-    questions: {
-      mcq: generateMcqs(keywords, counts.mcq),
-      veryShort: generateDirectQuestions(keywords, counts.veryShort, "veryShort"),
-      short: generateDirectQuestions(keywords, counts.short, "short"),
-      long: generateDirectQuestions(keywords, counts.long, "long")
-    }
+async function apiRequest(path, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
   };
-}
 
-function generateMcqs(keywords, count) {
-  const output = [];
-  const stems = [
-    "Which concept is most closely connected with",
-    "Which option best explains",
-    "Choose the most appropriate term for",
-    "Which idea from the chapter is linked to"
-  ];
+  if (state.token) {
+    headers.Authorization = `Bearer ${state.token}`;
+  }
 
-  for (let i = 0; i < count; i += 1) {
-    const correct = toTitleCase(keywords[i % keywords.length]);
-    const distractors = shuffleArray(
-      keywords
-        .filter((word) => toTitleCase(word) !== correct)
-        .map((word) => toTitleCase(word))
-    ).slice(0, 3);
-
-    while (distractors.length < 3) {
-      distractors.push(`Concept ${i + distractors.length + 1}`);
-    }
-
-    const options = shuffleArray([correct, ...distractors]);
-    output.push({
-      prompt: `${stems[i % stems.length]} "${correct}"?`,
-      options,
-      answer: correct
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: options.method || "GET",
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined
     });
+  } catch (error) {
+    throw new Error(
+      "Cannot connect to backend API. Start the backend server or set /config.js window.__API_BASE__ correctly."
+    );
   }
 
-  return output;
+  const isJson = response.headers.get("Content-Type")?.includes("application/json");
+  const payload = isJson ? await response.json() : {};
+
+  if (!response.ok) {
+    const message = payload.error || `Request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return payload;
 }
 
-function generateDirectQuestions(keywords, count, type) {
-  const output = [];
-
-  const template = {
-    veryShort: [
-      "Define {topic} in one or two lines.",
-      "State one key point about {topic}.",
-      "Write a very short note on {topic}."
-    ],
-    short: [
-      "Explain the significance of {topic} with suitable details.",
-      "Describe {topic} with an example from the chapter.",
-      "How does {topic} affect the overall concept of this chapter?"
-    ],
-    long: [
-      "Critically examine {topic} and support your answer with examples.",
-      "Discuss {topic} in detail. Include causes, process, and outcomes.",
-      "Write a long answer on {topic} and connect it to real-world applications."
-    ]
-  };
-
-  for (let i = 0; i < count; i += 1) {
-    const topic = toTitleCase(keywords[i % keywords.length]);
-    const line = template[type][i % template[type].length].replace("{topic}", topic);
-    output.push({ prompt: line });
-  }
-
-  return output;
+function setSession(token, user) {
+  state.token = token;
+  state.currentUser = user;
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
-function extractKeywords(extractedText, chapterTitle) {
-  const source = `${chapterTitle} ${extractedText}`.toLowerCase();
-  const words = source.replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
-  const counts = new Map();
-
-  for (const word of words) {
-    if (word.length < 4 || stopWords.has(word)) {
-      continue;
-    }
-    counts.set(word, (counts.get(word) || 0) + 1);
-  }
-
-  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([word]) => word);
-
-  if (sorted.length >= 5) {
-    return sorted.slice(0, 25);
-  }
-
-  return [
-    ...chapterTitle.toLowerCase().split(/\s+/).filter((word) => word.length > 3),
-    "definition",
-    "application",
-    "concept",
-    "analysis",
-    "process",
-    "impact"
-  ];
+function clearSession() {
+  state.token = null;
+  state.currentUser = null;
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 async function extractPdfText(file, maxPages) {
@@ -657,10 +496,6 @@ function byId(id) {
   return document.getElementById(id);
 }
 
-function getCurrentUser() {
-  return state.data.users.find((user) => user.id === state.data.currentUserId) || null;
-}
-
 function setMessage(id, text, status) {
   const node = byId(id);
   node.textContent = text;
@@ -686,22 +521,6 @@ function safeInt(value) {
 
 function cleanFileName(fileName) {
   return fileName.replace(/\.pdf$/i, "");
-}
-
-function toTitleCase(value) {
-  return value
-    .split(" ")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
-}
-
-function shuffleArray(items) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
 }
 
 function escapeHtml(value) {
