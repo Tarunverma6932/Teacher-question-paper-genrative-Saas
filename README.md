@@ -58,6 +58,13 @@ python3 backend/server.py
 Open:
 
 - `http://localhost:8000`
+- Do not open `index.html` directly as `file://...`
+
+Shortcut:
+
+```bash
+./run-local.sh
+```
 
 ## Demo accounts (seeded automatically)
 

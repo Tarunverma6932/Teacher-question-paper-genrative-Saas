@@ -1,5 +1,7 @@
 const TOKEN_KEY = "eduAssessAccessToken";
-const API_BASE = window.__API_BASE__ || "";
+const DEFAULT_LOCAL_API_BASE = "http://localhost:8000";
+const API_BASE =
+  window.__API_BASE__ || (window.location.protocol === "file:" ? DEFAULT_LOCAL_API_BASE : "");
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const state = {
@@ -442,7 +444,7 @@ async function apiRequest(path, options = {}) {
     });
   } catch (error) {
     throw new Error(
-      "Cannot connect to backend API. Start the backend server or set /config.js window.__API_BASE__ correctly."
+      "Cannot connect to backend API. Run `python3 backend/server.py` and open `http://localhost:8000` (not file://)."
     );
   }
 
