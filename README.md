@@ -59,6 +59,7 @@ Open:
 
 - `http://localhost:8000`
 - Do not open `index.html` directly as `file://...`
+- If you run frontend with Live Server on `localhost:5500`, the app now auto-calls backend at `http://localhost:8000`.
 
 Shortcut:
 

@@ -1,7 +1,6 @@
 const TOKEN_KEY = "eduAssessAccessToken";
 const DEFAULT_LOCAL_API_BASE = "http://localhost:8000";
-const API_BASE =
-  window.__API_BASE__ || (window.location.protocol === "file:" ? DEFAULT_LOCAL_API_BASE : "");
+const API_BASE = resolveApiBase();
 const PDF_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 const state = {
@@ -532,4 +531,28 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function resolveApiBase() {
+  const configured = (window.__API_BASE__ || "").trim();
+  if (configured) {
+    return configured.replace(/\/+$/, "");
+  }
+
+  const protocol = window.location.protocol;
+  const hostname = window.location.hostname;
+  const port = window.location.port;
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+
+  if (protocol === "file:") {
+    return DEFAULT_LOCAL_API_BASE;
+  }
+
+  // Common case: frontend on local static server (e.g. :5500), backend on :8000.
+  if (isLocal && port !== "8000") {
+    return DEFAULT_LOCAL_API_BASE;
+  }
+
+  // Same-origin for production deployments where frontend and backend share a host.
+  return "";
 }
