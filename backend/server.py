@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -9,7 +10,32 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
+
+
+EMAIL_REGEX = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def parse_allowed_origins(raw_value):
+    parts = [part.strip() for part in raw_value.split(",") if part.strip()]
+    return parts or ["*"]
+
+
+def parse_bool(value):
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def clean_text(value, max_length):
+    return str(value or "").strip()[:max_length]
+
+
+def is_valid_uuid(value):
+    try:
+        uuid.UUID(str(value))
+        return True
+    except ValueError:
+        return False
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT_DIR / "backend" / "data" / "app.db"
@@ -18,8 +44,11 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-CORS_ORIGIN = os.getenv("CORS_ORIGIN", "*")
+CORS_ORIGIN_RAW = os.getenv("CORS_ORIGIN", "*")
+ALLOWED_ORIGINS = parse_allowed_origins(CORS_ORIGIN_RAW)
 TOKEN_TTL_DAYS = int(os.getenv("TOKEN_TTL_DAYS", "7"))
+PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "6"))
+MAX_TEXT_CHARS = int(os.getenv("MAX_TEXT_CHARS", "60000"))
 
 STOP_WORDS = {
     "about",
@@ -182,6 +211,12 @@ class Database:
                     track=user["track"],
                 )
 
+    def purge_expired_tokens(self):
+        now = utc_now_iso()
+        with self.lock:
+            self.conn.execute("DELETE FROM auth_tokens WHERE expires_at <= ?", (now,))
+            self.conn.commit()
+
     def create_user(self, name, email, password, role, institution="", track=""):
         password_hash, password_salt = hash_password(password)
         now = utc_now_iso()
@@ -210,12 +245,10 @@ class Database:
         return self.get_user_by_id(user_id)
 
     def get_user_by_email(self, email):
-        row = self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-        return row
+        return self.conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
 
     def get_user_by_id(self, user_id):
-        row = self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-        return row
+        return self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
     def verify_user_credentials(self, email, password):
         user = self.get_user_by_email(email)
@@ -227,7 +260,6 @@ class Database:
         candidate_hash, _ = hash_password(password, salt)
         if not secrets.compare_digest(expected_hash, candidate_hash):
             return None
-
         return user
 
     def issue_token(self, user_id):
@@ -237,6 +269,7 @@ class Database:
         expires = now + timedelta(days=TOKEN_TTL_DAYS)
 
         with self.lock:
+            self.conn.execute("DELETE FROM auth_tokens WHERE expires_at <= ?", (now.isoformat(),))
             self.conn.execute(
                 "INSERT INTO auth_tokens (user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)",
                 (user_id, token_hash, expires.isoformat(), now.isoformat()),
@@ -254,16 +287,19 @@ class Database:
     def user_from_token(self, token):
         token_hash = sha256_text(token)
         now = utc_now_iso()
-        row = self.conn.execute(
-            """
-            SELECT u.*
-            FROM auth_tokens t
-            JOIN users u ON u.id = t.user_id
-            WHERE t.token_hash = ? AND t.expires_at > ?
-            LIMIT 1
-            """,
-            (token_hash, now),
-        ).fetchone()
+        with self.lock:
+            self.conn.execute("DELETE FROM auth_tokens WHERE expires_at <= ?", (now,))
+            row = self.conn.execute(
+                """
+                SELECT u.*
+                FROM auth_tokens t
+                JOIN users u ON u.id = t.user_id
+                WHERE t.token_hash = ?
+                LIMIT 1
+                """,
+                (token_hash,),
+            ).fetchone()
+            self.conn.commit()
         return row
 
     def update_profile(self, user_id, institution, track):
@@ -273,7 +309,6 @@ class Database:
                 (institution, track, user_id),
             )
             self.conn.commit()
-
         return self.get_user_by_id(user_id)
 
     def update_drive_link(self, user_id, drive_url):
@@ -284,7 +319,6 @@ class Database:
                 (drive_url, now, user_id),
             )
             self.conn.commit()
-
         return self.get_user_by_id(user_id)
 
     def create_assessment(self, teacher_id, title, chapter_title, pattern_notes, questions):
@@ -317,7 +351,7 @@ class Database:
         return self.get_assessment_by_id(assessment_id)
 
     def get_assessment_by_id(self, assessment_id):
-        row = self.conn.execute(
+        return self.conn.execute(
             """
             SELECT a.*, u.name AS teacher_name
             FROM assessments a
@@ -327,9 +361,17 @@ class Database:
             """,
             (assessment_id,),
         ).fetchone()
-        return row
 
-    def list_assessments_for_user(self, user):
+    def delete_assessment(self, assessment_id, teacher_id):
+        with self.lock:
+            cursor = self.conn.execute(
+                "DELETE FROM assessments WHERE id = ? AND teacher_id = ?",
+                (assessment_id, teacher_id),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def list_assessments_for_user(self, user, mine_only=False):
         if user["role"] == "student":
             query = (
                 """
@@ -340,20 +382,65 @@ class Database:
                 ORDER BY a.published_at DESC, a.created_at DESC
                 """
             )
-            rows = self.conn.execute(query).fetchall()
-        else:
+            return self.conn.execute(query).fetchall()
+
+        if mine_only:
             query = (
                 """
                 SELECT a.*, u.name AS teacher_name
                 FROM assessments a
                 JOIN users u ON u.id = a.teacher_id
-                WHERE a.teacher_id = ? OR a.published = 1
+                WHERE a.teacher_id = ?
                 ORDER BY a.created_at DESC
                 """
             )
-            rows = self.conn.execute(query, (user["id"],)).fetchall()
+            return self.conn.execute(query, (user["id"],)).fetchall()
 
-        return rows
+        query = (
+            """
+            SELECT a.*, u.name AS teacher_name
+            FROM assessments a
+            JOIN users u ON u.id = a.teacher_id
+            WHERE a.teacher_id = ? OR a.published = 1
+            ORDER BY a.created_at DESC
+            """
+        )
+        return self.conn.execute(query, (user["id"],)).fetchall()
+
+    def teacher_summary(self, teacher_id):
+        rows = self.conn.execute(
+            "SELECT questions_json, published_at, created_at FROM assessments WHERE teacher_id = ?",
+            (teacher_id,),
+        ).fetchall()
+
+        summary = {
+            "publishedAssessments": len(rows),
+            "totalQuestions": 0,
+            "mcqQuestions": 0,
+            "veryShortQuestions": 0,
+            "shortQuestions": 0,
+            "longQuestions": 0,
+            "latestPublishedAt": None,
+        }
+
+        for row in rows:
+            questions = json.loads(row["questions_json"])
+            mcq = len(questions.get("mcq", []))
+            very_short = len(questions.get("veryShort", []))
+            short = len(questions.get("short", []))
+            long = len(questions.get("long", []))
+
+            summary["mcqQuestions"] += mcq
+            summary["veryShortQuestions"] += very_short
+            summary["shortQuestions"] += short
+            summary["longQuestions"] += long
+            summary["totalQuestions"] += mcq + very_short + short + long
+            summary["latestPublishedAt"] = max(
+                summary["latestPublishedAt"] or row["published_at"] or row["created_at"],
+                row["published_at"] or row["created_at"],
+            )
+
+        return summary
 
 
 def utc_now():
@@ -451,6 +538,48 @@ def normalize_counts(raw_counts):
     return result
 
 
+def normalize_questions(raw_questions):
+    if not isinstance(raw_questions, dict):
+        raise APIError(400, "questions must be an object")
+
+    normalized = {"mcq": [], "veryShort": [], "short": [], "long": []}
+
+    for section in normalized:
+        section_items = raw_questions.get(section, [])
+        if not isinstance(section_items, list):
+            raise APIError(400, f"{section} must be a list")
+
+        for item in section_items:
+            if not isinstance(item, dict):
+                raise APIError(400, f"Every {section} question must be an object")
+
+            prompt = clean_text(item.get("prompt", ""), 1000)
+            if not prompt:
+                raise APIError(400, f"Every {section} question needs a prompt")
+
+            if section == "mcq":
+                options = item.get("options", [])
+                if not isinstance(options, list) or len(options) < 2:
+                    raise APIError(400, "MCQ options must be a list with at least two values")
+                cleaned_options = [clean_text(option, 300) for option in options if clean_text(option, 300)]
+                if len(cleaned_options) < 2:
+                    raise APIError(400, "MCQ options cannot be blank")
+                normalized[section].append(
+                    {
+                        "prompt": prompt,
+                        "options": cleaned_options,
+                        "answer": clean_text(item.get("answer", ""), 300),
+                    }
+                )
+            else:
+                normalized[section].append({"prompt": prompt})
+
+    if not any(len(items) for items in normalized.values()):
+        raise APIError(400, "At least one question is required")
+
+    return normalized
+
+
 def extract_keywords(extracted_text, chapter_title):
     source = f"{chapter_title} {extracted_text}".lower()
     filtered = []
@@ -506,7 +635,6 @@ def generate_mcqs(keywords, count):
             distractors.append(f"Concept {i + len(distractors) + 1}")
 
         options = [correct] + distractors
-        # deterministic shuffle based on question index
         shift = i % len(options)
         options = options[shift:] + options[:shift]
 
@@ -572,13 +700,11 @@ class APIHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT_DIR), **kwargs)
 
-    def log_message(self, fmt, *args):
-        super().log_message(fmt, *args)
-
     def do_OPTIONS(self):
         if self.path.startswith("/api/"):
             self.send_response(204)
             self._set_cors_headers()
+            self._set_common_headers()
             self.end_headers()
             return
         self.send_response(404)
@@ -602,25 +728,29 @@ class APIHandler(SimpleHTTPRequestHandler):
             return
         self.send_error(405)
 
+    def do_DELETE(self):
+        if self.path.startswith("/api/"):
+            self.handle_api("DELETE")
+            return
+        self.send_error(405)
+
     def handle_api(self, method):
         parsed = urlparse(self.path)
         path = parsed.path
+        query = parse_qs(parsed.query)
 
         try:
             if method == "GET" and path == "/api/health":
                 return self.send_json(200, {"status": "ok", "time": utc_now_iso()})
 
             if method == "POST" and path == "/api/auth/register":
-                payload = self.read_json_body()
-                return self.handle_register(payload)
+                return self.handle_register(self.read_json_body())
 
             if method == "POST" and path == "/api/auth/login":
-                payload = self.read_json_body()
-                return self.handle_login(payload)
+                return self.handle_login(self.read_json_body())
 
             if method == "POST" and path == "/api/auth/logout":
-                user, token = self.require_auth()
-                del user
+                _, token = self.require_auth()
                 DB.revoke_token(token)
                 return self.send_json(200, {"ok": True})
 
@@ -631,8 +761,8 @@ class APIHandler(SimpleHTTPRequestHandler):
             if method == "PUT" and path == "/api/profile":
                 user, _ = self.require_auth()
                 payload = self.read_json_body()
-                institution = str(payload.get("institution", "")).strip()
-                track = str(payload.get("track", "")).strip()
+                institution = clean_text(payload.get("institution", ""), 120)
+                track = clean_text(payload.get("track", ""), 120)
                 updated = DB.update_profile(user["id"], institution, track)
                 return self.send_json(200, {"user": to_public_user(updated)})
 
@@ -642,7 +772,7 @@ class APIHandler(SimpleHTTPRequestHandler):
                     raise APIError(403, "Only teachers can connect Google Drive")
 
                 payload = self.read_json_body()
-                drive_url = str(payload.get("driveUrl", "")).strip()
+                drive_url = clean_text(payload.get("driveUrl", ""), 500)
                 if not drive_url.startswith("https://drive.google.com"):
                     raise APIError(400, "Please provide a valid Google Drive URL")
 
@@ -655,10 +785,10 @@ class APIHandler(SimpleHTTPRequestHandler):
                     raise APIError(403, "Only teachers can generate papers")
 
                 payload = self.read_json_body()
-                title = str(payload.get("title", "")).strip() or "Summative Assessment"
-                chapter_title = str(payload.get("chapterTitle", "")).strip() or "Chapter"
-                pattern_notes = str(payload.get("patternNotes", "")).strip()
-                extracted_text = str(payload.get("extractedText", ""))
+                title = clean_text(payload.get("title", ""), 140) or "Summative Assessment"
+                chapter_title = clean_text(payload.get("chapterTitle", ""), 140) or "Chapter"
+                pattern_notes = clean_text(payload.get("patternNotes", ""), 1000)
+                extracted_text = clean_text(payload.get("extractedText", ""), MAX_TEXT_CHARS)
                 counts = normalize_counts(payload.get("counts", {}))
 
                 paper = build_paper(
@@ -670,7 +800,6 @@ class APIHandler(SimpleHTTPRequestHandler):
                     teacher_name=user["name"],
                 )
                 paper["createdAt"] = utc_now_iso()
-
                 return self.send_json(200, {"paper": paper})
 
             if method == "POST" and path == "/api/assessments":
@@ -679,17 +808,15 @@ class APIHandler(SimpleHTTPRequestHandler):
                     raise APIError(403, "Only teachers can publish assessments")
 
                 payload = self.read_json_body()
-                title = str(payload.get("title", "")).strip()
-                chapter_title = str(payload.get("chapterTitle", "")).strip()
-                pattern_notes = str(payload.get("patternNotes", "")).strip()
-                questions = payload.get("questions")
+                title = clean_text(payload.get("title", ""), 140)
+                chapter_title = clean_text(payload.get("chapterTitle", ""), 140)
+                pattern_notes = clean_text(payload.get("patternNotes", ""), 1000)
+                questions = normalize_questions(payload.get("questions"))
 
                 if not title:
                     raise APIError(400, "title is required")
                 if not chapter_title:
                     raise APIError(400, "chapterTitle is required")
-                if not isinstance(questions, dict):
-                    raise APIError(400, "questions must be an object")
 
                 row = DB.create_assessment(
                     teacher_id=user["id"],
@@ -702,9 +829,32 @@ class APIHandler(SimpleHTTPRequestHandler):
 
             if method == "GET" and path == "/api/assessments":
                 user, _ = self.require_auth()
-                rows = DB.list_assessments_for_user(user)
+                mine_only = parse_bool(query.get("mine", ["0"])[0])
+                rows = DB.list_assessments_for_user(user, mine_only=mine_only)
                 assessments = [serialize_assessment(row, user["role"]) for row in rows]
                 return self.send_json(200, {"assessments": assessments})
+
+            if method == "DELETE" and path.startswith("/api/assessments/"):
+                user, _ = self.require_auth()
+                if user["role"] != "teacher":
+                    raise APIError(403, "Only teachers can delete assessments")
+
+                assessment_id = path.split("/", 3)[-1].strip()
+                if not is_valid_uuid(assessment_id):
+                    raise APIError(400, "Invalid assessment ID")
+
+                deleted = DB.delete_assessment(assessment_id, user["id"])
+                if not deleted:
+                    raise APIError(404, "Assessment not found")
+                return self.send_json(200, {"ok": True})
+
+            if method == "GET" and path == "/api/teacher/summary":
+                user, _ = self.require_auth()
+                if user["role"] != "teacher":
+                    raise APIError(403, "Only teachers can view analytics")
+
+                summary = DB.teacher_summary(user["id"])
+                return self.send_json(200, {"summary": summary})
 
             raise APIError(404, "API route not found")
 
@@ -730,19 +880,19 @@ class APIHandler(SimpleHTTPRequestHandler):
         return user, token
 
     def handle_register(self, payload):
-        name = str(payload.get("name", "")).strip()
-        email = str(payload.get("email", "")).strip().lower()
+        name = clean_text(payload.get("name", ""), 120)
+        email = clean_text(payload.get("email", ""), 180).lower()
         password = str(payload.get("password", ""))
-        role = str(payload.get("role", "teacher")).strip().lower()
-        institution = str(payload.get("institution", "")).strip()
-        track = str(payload.get("track", "")).strip()
+        role = clean_text(payload.get("role", "teacher"), 20).lower()
+        institution = clean_text(payload.get("institution", ""), 120)
+        track = clean_text(payload.get("track", ""), 120)
 
-        if not name:
-            raise APIError(400, "name is required")
-        if "@" not in email:
+        if len(name) < 2:
+            raise APIError(400, "name must be at least 2 characters")
+        if not EMAIL_REGEX.match(email):
             raise APIError(400, "valid email is required")
-        if len(password) < 6:
-            raise APIError(400, "password must be at least 6 characters")
+        if len(password) < PASSWORD_MIN_LENGTH:
+            raise APIError(400, f"password must be at least {PASSWORD_MIN_LENGTH} characters")
         if role not in ("teacher", "student"):
             raise APIError(400, "role must be teacher or student")
         if DB.get_user_by_email(email):
@@ -753,7 +903,7 @@ class APIHandler(SimpleHTTPRequestHandler):
         return self.send_json(201, {"token": token, "user": to_public_user(user)})
 
     def handle_login(self, payload):
-        email = str(payload.get("email", "")).strip().lower()
+        email = clean_text(payload.get("email", ""), 180).lower()
         password = str(payload.get("password", ""))
 
         if not email or not password:
@@ -784,21 +934,45 @@ class APIHandler(SimpleHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status_code)
         self._set_cors_headers()
+        self._set_common_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _resolve_cors_origin(self):
+        request_origin = self.headers.get("Origin")
+
+        if "*" in ALLOWED_ORIGINS:
+            return "*"
+
+        if request_origin and request_origin in ALLOWED_ORIGINS:
+            return request_origin
+
+        if ALLOWED_ORIGINS:
+            return ALLOWED_ORIGINS[0]
+
+        return "*"
+
     def _set_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", CORS_ORIGIN)
+        allowed_origin = self._resolve_cors_origin()
+        self.send_header("Access-Control-Allow-Origin", allowed_origin)
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        if allowed_origin != "*":
+            self.send_header("Vary", "Origin")
+
+    def _set_common_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Cache-Control", "no-store")
 
 
 def run_server():
     server = ThreadingHTTPServer((HOST, PORT), APIHandler)
     print(f"Server running on http://{HOST}:{PORT}")
     print(f"Database path: {DB_PATH}")
+    print(f"Allowed origins: {', '.join(ALLOWED_ORIGINS)}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

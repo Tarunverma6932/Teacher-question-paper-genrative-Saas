@@ -107,6 +107,32 @@
           <div id="teacherWorkspace" class="workspace-pane hidden">
             <section class="card">
               <div class="card-head">
+                <h3>Teacher Analytics</h3>
+                <span class="pill">Live Summary</span>
+              </div>
+              <div class="summary-grid" id="teacherSummary">
+                <article class="summary-stat">
+                  <p class="stat-label">Published Papers</p>
+                  <p class="stat-value" id="summaryPublished">0</p>
+                </article>
+                <article class="summary-stat">
+                  <p class="stat-label">Total Questions</p>
+                  <p class="stat-value" id="summaryQuestions">0</p>
+                </article>
+                <article class="summary-stat">
+                  <p class="stat-label">MCQ Bank</p>
+                  <p class="stat-value" id="summaryMcq">0</p>
+                </article>
+                <article class="summary-stat">
+                  <p class="stat-label">Long Answers</p>
+                  <p class="stat-value" id="summaryLong">0</p>
+                </article>
+              </div>
+              <p id="summaryUpdatedAt" class="subtle">Summary updates after every publish.</p>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
                 <h3>Google Drive Connection</h3>
                 <span class="pill">Teacher Tool</span>
               </div>
@@ -176,6 +202,7 @@
                 <button id="generateBtn" class="btn btn-primary" type="button">Generate Paper</button>
                 <button id="publishBtn" class="btn btn-secondary" type="button" disabled>Publish for Students</button>
                 <button id="printBtn" class="btn btn-ghost" type="button" disabled>Print</button>
+                <button id="exportBtn" class="btn btn-ghost" type="button" disabled>Export as Text</button>
               </div>
               <p id="generatorStatus" class="message"></p>
             </section>
@@ -188,6 +215,15 @@
               <div id="paperOutput" class="paper-output empty">
                 Generate an assessment to preview it here.
               </div>
+            </section>
+
+            <section class="card">
+              <div class="card-head">
+                <h3>Published Assessments</h3>
+                <span class="pill">Teacher Records</span>
+              </div>
+              <p class="subtle">Your published papers are listed here for quick review.</p>
+              <div id="teacherAssessments" class="feed-list"></div>
             </section>
           </div>
 

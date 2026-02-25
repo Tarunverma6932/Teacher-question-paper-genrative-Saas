@@ -7,7 +7,10 @@ const state = {
   token: localStorage.getItem(TOKEN_KEY),
   currentUser: null,
   authTab: "signin",
-  draftAssessment: null
+  draftAssessment: null,
+  teacherSummary: null,
+  teacherAssessments: [],
+  studentAssessments: []
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -32,6 +35,9 @@ function bindEvents() {
   byId("generateBtn").addEventListener("click", handleGeneratePaper);
   byId("publishBtn").addEventListener("click", handlePublishPaper);
   byId("printBtn").addEventListener("click", handlePrintPaper);
+  byId("exportBtn").addEventListener("click", handleExportPaper);
+
+  byId("teacherAssessments").addEventListener("click", handleTeacherListClick);
 }
 
 async function restoreSession() {
@@ -42,6 +48,7 @@ async function restoreSession() {
   try {
     const response = await apiRequest("/api/auth/me");
     state.currentUser = response.user;
+    await hydrateRoleData();
   } catch (error) {
     clearSession();
   }
@@ -74,6 +81,7 @@ async function handleSignIn(event) {
     });
 
     setSession(response.token, response.user);
+    await hydrateRoleData();
     setMessage("authMessage", "Logged in successfully.", "success");
     byId("signInForm").reset();
     renderApp();
@@ -101,6 +109,7 @@ async function handleSignUp(event) {
     });
 
     setSession(response.token, response.user);
+    await hydrateRoleData();
     setMessage("authMessage", "Account created and logged in.", "success");
     byId("signUpForm").reset();
     renderApp();
@@ -120,6 +129,9 @@ async function handleLogout() {
 
   clearSession();
   state.draftAssessment = null;
+  state.teacherSummary = null;
+  state.teacherAssessments = [];
+  state.studentAssessments = [];
   renderApp();
 }
 
@@ -232,6 +244,7 @@ async function handleGeneratePaper() {
     renderPaper(state.draftAssessment);
     byId("publishBtn").disabled = false;
     byId("printBtn").disabled = false;
+    byId("exportBtn").disabled = false;
     setMessage("generatorStatus", "Assessment generated. Review and publish for students.", "success");
   } catch (error) {
     setMessage("generatorStatus", error.message, "error");
@@ -263,6 +276,7 @@ async function handlePublishPaper() {
 
     byId("publishBtn").disabled = true;
     setMessage("generatorStatus", "Assessment published to student feed.", "success");
+    await loadTeacherData();
   } catch (error) {
     setMessage("generatorStatus", error.message, "error");
   }
@@ -270,6 +284,52 @@ async function handlePublishPaper() {
 
 function handlePrintPaper() {
   window.print();
+}
+
+function handleExportPaper() {
+  const paper = state.draftAssessment;
+  if (!paper) {
+    setMessage("generatorStatus", "Generate a paper before exporting.", "error");
+    return;
+  }
+
+  const content = buildPaperText(paper);
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${paper.title.replace(/\s+/g, "-").toLowerCase() || "assessment"}.txt`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function handleTeacherListClick(event) {
+  const button = event.target.closest("button[data-action='delete-assessment']");
+  if (!button) {
+    return;
+  }
+
+  const assessmentId = button.dataset.assessmentId;
+  if (!assessmentId) {
+    return;
+  }
+
+  const confirmed = window.confirm("Delete this published assessment? This cannot be undone.");
+  if (!confirmed) {
+    return;
+  }
+
+  button.disabled = true;
+  try {
+    await apiRequest(`/api/assessments/${assessmentId}`, { method: "DELETE" });
+    await loadTeacherData();
+    setMessage("generatorStatus", "Assessment deleted successfully.", "success");
+  } catch (error) {
+    setMessage("generatorStatus", error.message, "error");
+    button.disabled = false;
+  }
 }
 
 function renderApp() {
@@ -321,50 +381,133 @@ function hydrateTeacherWorkspace(user) {
     setMessage("driveStatus", "No Google Drive link connected yet.", "");
   }
 
+  renderTeacherSummary();
+  renderTeacherAssessments();
+
   if (state.draftAssessment) {
     renderPaper(state.draftAssessment);
     byId("publishBtn").disabled = state.draftAssessment.published;
     byId("printBtn").disabled = false;
+    byId("exportBtn").disabled = false;
   } else {
     byId("paperOutput").textContent = "Generate an assessment to preview it here.";
     byId("paperOutput").classList.add("empty");
     byId("publishBtn").disabled = true;
     byId("printBtn").disabled = true;
+    byId("exportBtn").disabled = true;
   }
 }
 
-async function renderStudentFeed() {
-  const feedEl = byId("studentFeed");
-  feedEl.innerHTML = `<p class="subtle">Loading assessments...</p>`;
+async function hydrateRoleData() {
+  if (!state.currentUser) {
+    return;
+  }
 
+  if (state.currentUser.role === "teacher") {
+    await loadTeacherData();
+  } else {
+    await loadStudentData();
+  }
+}
+
+async function loadTeacherData() {
+  try {
+    const [summaryResponse, assessmentsResponse] = await Promise.all([
+      apiRequest("/api/teacher/summary"),
+      apiRequest("/api/assessments?mine=1")
+    ]);
+
+    state.teacherSummary = summaryResponse.summary || null;
+    state.teacherAssessments = assessmentsResponse.assessments || [];
+
+    renderTeacherSummary();
+    renderTeacherAssessments();
+  } catch (error) {
+    setMessage("generatorStatus", error.message, "error");
+  }
+}
+
+async function loadStudentData() {
   try {
     const response = await apiRequest("/api/assessments");
-    const assessments = response.assessments || [];
-
-    if (!assessments.length) {
-      feedEl.innerHTML = `<p class="subtle">No assessments published yet.</p>`;
-      return;
-    }
-
-    feedEl.innerHTML = assessments
-      .map((assessment) => {
-        const when = new Date(assessment.publishedAt || assessment.createdAt).toLocaleString();
-        return `
-          <article class="feed-item">
-            <h4>${escapeHtml(assessment.title)}</h4>
-            <p class="feed-meta">By ${escapeHtml(assessment.teacherName)} • ${when}</p>
-            <p class="feed-meta">Chapter: ${escapeHtml(assessment.chapterTitle)}</p>
-            <details>
-              <summary>Open paper</summary>
-              ${renderPaperMarkup(assessment, false)}
-            </details>
-          </article>
-        `;
-      })
-      .join("");
+    state.studentAssessments = response.assessments || [];
+    renderStudentFeed();
   } catch (error) {
+    const feedEl = byId("studentFeed");
     feedEl.innerHTML = `<p class="message error">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderTeacherSummary() {
+  const summary = state.teacherSummary;
+  byId("summaryPublished").textContent = String(summary?.publishedAssessments || 0);
+  byId("summaryQuestions").textContent = String(summary?.totalQuestions || 0);
+  byId("summaryMcq").textContent = String(summary?.mcqQuestions || 0);
+  byId("summaryLong").textContent = String(summary?.longQuestions || 0);
+
+  if (summary?.latestPublishedAt) {
+    byId("summaryUpdatedAt").textContent = `Last published: ${formatDateTime(summary.latestPublishedAt)}`;
+  } else {
+    byId("summaryUpdatedAt").textContent = "Summary updates after every publish.";
+  }
+}
+
+function renderTeacherAssessments() {
+  const listEl = byId("teacherAssessments");
+  const assessments = state.teacherAssessments || [];
+
+  if (!assessments.length) {
+    listEl.innerHTML = `<p class="subtle">No published assessments yet. Publish your first paper to build history.</p>`;
+    return;
+  }
+
+  listEl.innerHTML = assessments
+    .map((assessment) => {
+      const when = formatDateTime(assessment.publishedAt || assessment.createdAt);
+      return `
+        <article class="feed-item">
+          <h4>${escapeHtml(assessment.title)}</h4>
+          <p class="feed-meta">Chapter: ${escapeHtml(assessment.chapterTitle)} • ${escapeHtml(when)}</p>
+          <details>
+            <summary>Review paper</summary>
+            ${renderPaperMarkup(assessment, true)}
+          </details>
+          <div class="inline-actions">
+            <button class="btn btn-ghost btn-small" type="button" data-action="delete-assessment" data-assessment-id="${escapeHtml(
+              assessment.id
+            )}">Delete</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderStudentFeed() {
+  const feedEl = byId("studentFeed");
+  const assessments = state.studentAssessments || [];
+
+  if (!assessments.length) {
+    feedEl.innerHTML = `<p class="subtle">No assessments published yet.</p>`;
+    return;
+  }
+
+  feedEl.innerHTML = assessments
+    .map((assessment) => {
+      const when = formatDateTime(assessment.publishedAt || assessment.createdAt);
+      return `
+        <article class="feed-item">
+          <h4>${escapeHtml(assessment.title)}</h4>
+          <p class="feed-meta">By ${escapeHtml(assessment.teacherName)} • ${escapeHtml(when)}</p>
+          <p class="feed-meta">Chapter: ${escapeHtml(assessment.chapterTitle)}</p>
+          <details>
+            <summary>Open paper</summary>
+            ${renderPaperMarkup(assessment, false)}
+          </details>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderPaper(paper) {
@@ -380,7 +523,7 @@ function renderPaperMarkup(paper, showAnswers) {
       <p>
         Teacher: ${escapeHtml(paper.teacherName || state.currentUser?.name || "Teacher")}<br />
         Chapter: ${escapeHtml(paper.chapterTitle)}<br />
-        Generated: ${new Date(paper.createdAt || Date.now()).toLocaleString()}${
+        Generated: ${formatDateTime(paper.createdAt || Date.now())}${
     paper.patternNotes ? `<br />Pattern notes: ${escapeHtml(paper.patternNotes)}` : ""
   }
       </p>
@@ -424,6 +567,45 @@ function renderQuestionSection(title, questions, mode, showAnswers) {
   `;
 }
 
+function buildPaperText(paper) {
+  const lines = [];
+  lines.push(paper.title || "Summative Assessment");
+  lines.push(`Teacher: ${paper.teacherName || state.currentUser?.name || "Teacher"}`);
+  lines.push(`Chapter: ${paper.chapterTitle || "Chapter"}`);
+  lines.push(`Generated: ${formatDateTime(paper.createdAt || Date.now())}`);
+  if (paper.patternNotes) {
+    lines.push(`Pattern Notes: ${paper.patternNotes}`);
+  }
+  lines.push("");
+
+  appendTextSection(lines, "Section A: MCQs", paper.questions?.mcq || [], true);
+  appendTextSection(lines, "Section B: Very Short Answer", paper.questions?.veryShort || [], false);
+  appendTextSection(lines, "Section C: Short Answer", paper.questions?.short || [], false);
+  appendTextSection(lines, "Section D: Long Answer", paper.questions?.long || [], false);
+
+  return lines.join("\n");
+}
+
+function appendTextSection(lines, title, questions, includeOptions) {
+  if (!questions.length) {
+    return;
+  }
+
+  lines.push(title);
+  questions.forEach((question, index) => {
+    lines.push(`${index + 1}. ${question.prompt}`);
+    if (includeOptions) {
+      (question.options || []).forEach((option, optionIndex) => {
+        lines.push(`   ${String.fromCharCode(65 + optionIndex)}. ${option}`);
+      });
+      if (question.answer) {
+        lines.push(`   Answer: ${question.answer}`);
+      }
+    }
+  });
+  lines.push("");
+}
+
 async function apiRequest(path, options = {}) {
   const headers = {
     "Content-Type": "application/json",
@@ -451,6 +633,10 @@ async function apiRequest(path, options = {}) {
   const payload = isJson ? await response.json() : {};
 
   if (!response.ok) {
+    if (response.status === 401 && state.token) {
+      clearSession();
+      renderApp();
+    }
     const message = payload.error || `Request failed (${response.status})`;
     throw new Error(message);
   }
@@ -524,6 +710,10 @@ function cleanFileName(fileName) {
   return fileName.replace(/\.pdf$/i, "");
 }
 
+function formatDateTime(value) {
+  return new Date(value).toLocaleString();
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -548,11 +738,9 @@ function resolveApiBase() {
     return DEFAULT_LOCAL_API_BASE;
   }
 
-  // Common case: frontend on local static server (e.g. :5500), backend on :8000.
   if (isLocal && port !== "8000") {
     return DEFAULT_LOCAL_API_BASE;
   }
 
-  // Same-origin for production deployments where frontend and backend share a host.
   return "";
 }

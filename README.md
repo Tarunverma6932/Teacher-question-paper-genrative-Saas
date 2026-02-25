@@ -1,41 +1,34 @@
-# Teacher Question Paper Generative SaaS
+# EduAssess Pro - Teacher Question Paper Generative SaaS
 
-A full-stack SaaS platform for teachers and students:
+EduAssess Pro is a full-stack SaaS platform for teachers and students to generate summative assessment papers from chapter PDFs and publish them to a shared student feed.
 
-- Teacher uploads chapter/book PDF
-- Teacher sets assessment pattern (`MCQ`, `Very Short`, `Short`, `Long`)
-- Platform generates a summative assessment paper
-- Teacher publishes paper
-- Students see shared published papers from all teachers
-- Real authentication and shared database-backed APIs
+## Live product capabilities
+
+- Teacher and student authentication (real backend auth)
+- Role-based dashboards
+- Teacher profile + Google Drive folder linking
+- PDF-to-question generation with pattern controls:
+  - MCQ
+  - Very Short
+  - Short
+  - Long
+- Assessment publish flow to shared student feed
+- Teacher analytics dashboard
+- Teacher published-paper history (review + delete)
+- Export paper as text + print support
+- Student view with answer key hidden
 
 ## Architecture
 
-- Frontend: `/Users/tarunverma/Documents/New project/index.html`, `/Users/tarunverma/Documents/New project/styles.css`, `/Users/tarunverma/Documents/New project/app.js`
-- Backend API: `/Users/tarunverma/Documents/New project/backend/server.py`
-- Database: SQLite (`/Users/tarunverma/Documents/New project/backend/data/app.db` by default)
-
-## Core features implemented
-
-- Auth:
-  - Register
-  - Login
-  - Token-based session auth (Bearer token)
-  - Logout
-  - Authenticated `me` endpoint
-- Profiles:
-  - Teacher and student profiles
-  - Update institution/track
-- Teacher tools:
-  - Connect Google Drive folder URL
-  - Generate paper from uploaded PDF text and pattern counts
-  - Publish assessment
-- Student feed:
-  - Shared published assessments across users
-  - Answers hidden for student role
+- Frontend: `index.html`, `styles.css`, `app.js`, `config.js`
+- Backend API: `backend/server.py`
+- Database: SQLite (`backend/data/app.db` by default)
+- Deployment config: `render.yaml`, `Procfile`, `Dockerfile`
+- CI and tests: `.github/workflows/ci.yml`, `tests/test_backend_core.py`
 
 ## API endpoints
 
+- `GET /api/health`
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
@@ -45,59 +38,72 @@ A full-stack SaaS platform for teachers and students:
 - `POST /api/assessments/generate`
 - `POST /api/assessments`
 - `GET /api/assessments`
-- `GET /api/health`
+- `DELETE /api/assessments/:id`
+- `GET /api/teacher/summary`
 
-## Run locally
-
-From `/Users/tarunverma/Documents/New project`:
+## Local run
 
 ```bash
-python3 backend/server.py
+cd "/Users/tarunverma/Documents/New project"
+./run-local.sh
 ```
 
 Open:
 
 - `http://localhost:8000`
-- Do not open `index.html` directly as `file://...`
-- If you run frontend with Live Server on `localhost:5500`, the app now auto-calls backend at `http://localhost:8000`.
 
-Shortcut:
+Notes:
+
+- Do not run via `file://...` for full API behavior.
+- If frontend is on `localhost:5500`, it auto-routes API to `http://localhost:8000`.
+
+## Test and checks
 
 ```bash
-./run-local.sh
+make check
+make test
 ```
 
-## Demo accounts (seeded automatically)
+## Docker run
+
+```bash
+docker build -t eduassess-pro .
+docker run --rm -p 8000:8000 eduassess-pro
+```
+
+## Deployment (Render)
+
+1. Push repo to GitHub.
+2. Create a new Render **Blueprint** from this repo.
+3. Render reads `render.yaml` and deploys web service + persistent disk.
+4. Verify health endpoint: `/api/health`.
+
+## Environment variables
+
+Copy `.env.example` values as needed:
+
+- `HOST`
+- `PORT`
+- `DATABASE_PATH`
+- `CORS_ORIGIN`
+- `TOKEN_TTL_DAYS`
+- `PASSWORD_MIN_LENGTH`
+- `MAX_TEXT_CHARS`
+
+## Demo accounts (seeded)
 
 - Teacher: `teacher@demo.com` / `teacher123`
 - Student: `student@demo.com` / `student123`
 
-## Deploy on internet (Render)
+## Client pitch assets
 
-This repo includes `/Users/tarunverma/Documents/New project/render.yaml`.
+- `PITCH_BRIEF.md`
+- `DEMO_SCRIPT.md`
+- `CLIENT_HANDOFF.md`
 
-### Steps
+## Production roadmap
 
-1. Push repo to GitHub.
-2. In Render, create a new **Blueprint** from your GitHub repo.
-3. Render will detect `render.yaml` and deploy automatically.
-4. After deploy, open your Render service URL and use the app.
-
-If frontend and backend are hosted on different domains:
-
-1. Edit `/Users/tarunverma/Documents/New project/config.js`
-2. Set `window.__API_BASE__` to your backend URL
-3. Redeploy frontend
-
-## Environment variables
-
-- `PORT` (set by platform)
-- `HOST` (default: `0.0.0.0`)
-- `DATABASE_PATH` (optional custom DB path)
-- `CORS_ORIGIN` (default: `*`)
-- `TOKEN_TTL_DAYS` (default: `7`)
-
-## Notes
-
-- GitHub Pages is static-only and cannot run this backend.
-- For production scale, next upgrade should be PostgreSQL + managed auth + background jobs for heavier PDF/AI workloads.
+- PostgreSQL migration for scale
+- Google OAuth + Drive API integration
+- Advanced AI generation quality controls
+- Admin and multi-tenant school management

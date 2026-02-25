@@ -1,0 +1,2 @@
+# Standard-library only backend at the moment.
+# Keep this file for deployment platforms that expect requirements.txt.

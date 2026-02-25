@@ -3,9 +3,16 @@ services:
     name: teacher-question-paper-saas
     env: python
     plan: free
-    buildCommand: ""
+    buildCommand: pip install -r requirements.txt
     startCommand: python backend/server.py
+    healthCheckPath: /api/health
+    disk:
+      name: app-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1
     envVars:
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/backend/data/app.db
       - key: CORS_ORIGIN
         value: "*"
       - key: TOKEN_TTL_DAYS
